@@ -7,21 +7,29 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
     cat <<'USAGE'
 Usage: sudo bash prepare-debian12-kernel-offline.sh [output-directory]
-       [--target-status FILE ...] [--extra-package NAME ...]
+       [--kernel-6.12] [--target-status FILE ...] [--extra-package NAME ...]
 Default output: /var/tmp/debian12-kernel-offline
 Requires Debian 12 amd64, APT, dpkg-deb, curl, python3 (no dpkg-dev needed).
 Keep kernel-offline-tools.py, kernel-boot-check.sh, install-kernel-offline.sh, README-KO.txt and
 collect-systemvm-state.sh beside this script.
+Place ca-certificates_20250419~deb12u2_all.deb in the output directory or beside this script;
+it is included in repo/, Packages, packages.tsv and SHA256SUMS.
 Target status files are optional; pass one per distinct SystemVM package state.
 USAGE
 }
 output_dir=/var/tmp/debian12-kernel-offline
 output_seen=false
 target_states=()
-roots=(linux-image-amd64 initramfs-tools linux-base kmod busybox zstd)
+kernel_meta=linux-image-amd64
+kernel_cve=CVE-2026-43499
+roots=(initramfs-tools linux-base kmod busybox zstd ca-certificates)
 while (( $# )); do
     case $1 in
         -h|--help) usage; exit 0 ;;
+        --kernel-6.12)
+            kernel_meta=linux-image-6.12-amd64
+            kernel_cve=CVE-2026-99362
+            shift ;;
         --target-status)
             [[ $# -ge 2 && -s $2 ]] || die '--target-status requires a nonempty dpkg status file.'
             target_states+=("$(realpath -- "$2")")
@@ -34,6 +42,7 @@ while (( $# )); do
            output_dir=$1; output_seen=true; shift ;;
     esac
 done
+roots=("$kernel_meta" "${roots[@]}")
 [[ $EUID -eq 0 ]] || die 'Run as root.'
 source /etc/os-release
 [[ ${ID:-} == debian && ${VERSION_ID:-} == 12 ]] || die 'Requires Debian 12.'
@@ -49,6 +58,17 @@ done
 mkdir -p -- "$output_dir"
 output_dir=$(cd -- "$output_dir" && pwd -P)
 [[ $output_dir =~ ^/[A-Za-z0-9_./-]+$ ]] || die 'Use a simple absolute output path without spaces.'
+ca_name='ca-certificates_20250419~deb12u2_all.deb'
+ca_source=''
+for ca_candidate in "$output_dir/$ca_name" "$script_dir/$ca_name" "$script_dir/output/$ca_name"; do
+    if [[ -f $ca_candidate && -r $ca_candidate ]]; then
+        ca_source=$ca_candidate
+        break
+    fi
+done
+[[ -n $ca_source ]] || die "Missing CA DEB: place $ca_name in $output_dir or beside this script."
+ca_metadata=$(dpkg-deb -f "$ca_source" Package Version Architecture) || die 'Cannot read CA DEB metadata.'
+[[ $ca_metadata == $'Package: ca-certificates\nVersion: 20250419~deb12u2\nArchitecture: all' ]] || die 'Unexpected CA DEB package/version/architecture.'
 work_dir=$(mktemp -d "$output_dir/build.XXXXXXXX")
 chmod 0755 "$work_dir"
 bundle_name="debian12-kernel-amd64-$(date -u +%Y%m%dT%H%M%SZ)-${work_dir##*.}"
@@ -65,12 +85,12 @@ run_log() {
         die "Command failed; see $logfile"
     fi
 }
-printf '[1/6] Reading CVE-2026-43499 fixed version from Debian tracker\n'
+printf '[1/6] Reading %s fixed version from Debian tracker\n' "$kernel_cve"
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
     --retry 3 --connect-timeout 20 --max-time 120 \
-    https://security-tracker.debian.org/tracker/CVE-2026-43499 \
-    -o "$bundle_dir/CVE-2026-43499.html"
-python3 "$script_dir/kernel-offline-tools.py" tracker "$bundle_dir/CVE-2026-43499.html" > "$bundle_dir/cve-fixed-version.txt"
+    "https://security-tracker.debian.org/tracker/$kernel_cve" \
+    -o "$bundle_dir/$kernel_cve.html"
+python3 "$script_dir/kernel-offline-tools.py" tracker "$bundle_dir/$kernel_cve.html" > "$bundle_dir/cve-fixed-version.txt"
 minimum=$(cat "$bundle_dir/cve-fixed-version.txt")
 printf 'Bookworm linux fixed since: %s\n' "$minimum"
 cat > "$work_dir/sources.list" <<'SOURCES'
@@ -110,15 +130,26 @@ online_apt() { APT_CONFIG="$work_dir/download.conf" /usr/bin/apt-get "$@"; }
 online_cache() { APT_CONFIG="$work_dir/download.conf" /usr/bin/apt-cache "$@"; }
 printf '[2/6] Updating authenticated bookworm indexes (no host APT changes)\n'
 run_log "$bundle_dir/validation/online-update.log" online_apt -o APT::Update::Error-Mode=any update
-online_cache policy linux-image-amd64 > "$bundle_dir/evidence/kernel-policy.txt"
+online_cache policy "$kernel_meta" > "$bundle_dir/evidence/kernel-policy.txt"
 cat "$bundle_dir/evidence/kernel-policy.txt"
-candidate=$(online_cache policy linux-image-amd64 | awk '/Candidate:/ {print $2}')
-[[ $candidate =~ ^6\.1\.[0-9]+-[0-9A-Za-z.+~]+$ ]] || die "Unexpected bookworm candidate: $candidate"
+candidate=$(online_cache policy "$kernel_meta" | awk '/Candidate:/ {print $2}')
+[[ $candidate =~ ^6\.(1|12)\.[0-9]+-[0-9A-Za-z.+~]+$ ]] || die "Unexpected bookworm candidate: $candidate"
 dpkg --compare-versions "$candidate" ge "$minimum" || die "Candidate $candidate is below CVE fixed version $minimum"
+for root in "${roots[@]}"; do
+    case $root in
+        openjdk-17-jre|openjdk-17-jre-headless|openjdk-17-jdk|openjdk-17-jdk-headless)
+            java_minimum='17.0.21.1+2-1~deb12u1' # Debian bookworm fix for CVE-2026-91403
+            java_candidate=$(online_cache policy "$root" | awk '/Candidate:/ {print $2}')
+            [[ -n $java_candidate && $java_candidate != '(none)' ]] || die "No candidate for $root"
+            dpkg --compare-versions "$java_candidate" ge "$java_minimum" ||
+                die "$root candidate $java_candidate is below CVE-2026-91403 fixed version $java_minimum"
+            ;;
+    esac
+done
 printf '%s\n' "${roots[@]}" > "$bundle_dir/roots.txt"
 printf '[3/6] Downloading kernel and full selected dependency closure with EMPTY dpkg state\n'
 run_log "$bundle_dir/validation/empty-download.log" online_apt --yes --download-only --no-remove \
-    --no-install-recommends install "linux-image-amd64=$candidate" "${roots[@]:1}"
+    --no-install-recommends install "$kernel_meta=$candidate" "${roots[@]:1}"
 # Metadata inspection identifies the exact signed kernel; rebuild again after
 # target-state union, because those plans can add more dependency packages.
 python3 "$script_dir/kernel-offline-tools.py" index "$bundle_dir"
@@ -126,7 +157,7 @@ kernel_pkg=$(cat "$bundle_dir/kernel-package.txt")
 kernel_ver=$(cat "$bundle_dir/kernel-version.txt")
 [[ $kernel_ver == "$candidate" ]] || die 'Repository changed while downloading. Retry in a new build.'
 dpkg --compare-versions "$kernel_ver" ge "$minimum" || die 'Downloaded kernel is below CVE fixed version.'
-targets=("$kernel_pkg=$kernel_ver" "linux-image-amd64=$candidate" "${roots[@]:1}")
+targets=("$kernel_pkg=$kernel_ver" "$kernel_meta=$candidate" "${roots[@]:1}")
 printf 'State\tSHA256\n' > "$bundle_dir/evidence/target-states.tsv"
 state_copies=()
 for i in "${!target_states[@]}"; do
@@ -146,6 +177,8 @@ for i in "${!target_states[@]}"; do
         --yes --download-only --no-remove --no-install-recommends install "${targets[@]}"
 done
 printf '[4/6] Creating local APT index and package manifest\n'
+printf 'Including CA package in repo: %s\n' "$ca_source"
+cp -- "$ca_source" "$bundle_dir/repo/$ca_name"
 python3 "$script_dir/kernel-offline-tools.py" index "$bundle_dir"
 gzip -n -9 -c "$bundle_dir/repo/Packages" > "$bundle_dir/repo/Packages.gz"
 cp "$work_dir/sources.list" "$bundle_dir/download-sources.list"
@@ -186,7 +219,7 @@ done < "$bundle_dir/packages.tsv"
 online_cache show "${upstream_specs[@]}" > "$bundle_dir/evidence/upstream-packages.txt"
 {
     printf 'Created UTC: %s\nDownloader OS: %s\nDownloader running kernel: %s\n' "$(date -u +%FT%TZ)" "$PRETTY_NAME" "$(uname -r)"
-    printf 'Target: Debian 12 / bookworm / amd64\nCVE: CVE-2026-43499\nFixed since (linux): %s\n' "$minimum"
+    printf 'Target: Debian 12 / bookworm / amd64\nCVE: %s\nFixed since: %s\n' "$kernel_cve" "$minimum"
     printf 'Kernel: %s=%s\nAdditional real target statuses: %s\n' "$kernel_pkg" "$kernel_ver" "${#state_copies[@]}"
     printf 'Closure: empty dpkg status + optional real target status plans; no removals.\n'
     printf 'Root packages: %s\n' "${roots[*]}"

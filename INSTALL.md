@@ -13,7 +13,7 @@ debian12-kernel-amd64-20261106T074740Z-NJPHLu8I.tar.gz.sha256
 
 커널과 필요한 의존성, 설치기, 부팅 검사기가 모두 포함되어 있습니다. 아래 순서대로 적용합니다.
 
-이 묶음의 부팅 검사 리비전은 `20261106-grub2-primary-3`입니다. 압축 해제 후 `head -n 1 BOOT-CONFIG-REVISION.txt`로 확인합니다.
+새로 빌드하는 묶음의 부팅 검사 리비전은 `20261110-grub-menu-10s-1`입니다. 압축 해제 후 `head -n 1 BOOT-CONFIG-REVISION.txt`로 확인합니다.
 
 **반입 → 체크섬 확인 → 압축 해제 → check → install → check-boot → 직접 재부팅 → verify → 서비스 확인**
 
@@ -248,3 +248,23 @@ bash prepare-debian12-kernel-offline.sh ./output \
 현재 VM의 변경은 원본 SystemVM 템플릿에 자동으로 반영되지 않습니다. 재생성되는 VM에도 유지하려면 사용 중인 제품 버전과 호환되는 템플릿을 별도로 갱신·검증합니다.
 
 설치기 수정 이유와 검증 이력은 `plan.md`에 기록합니다. 이 적용 문서는 최종 통합 묶음의 실행 절차를 안내합니다.
+
+## 커널 선택 메뉴 자동 설정
+
+최신 소스로 새로 만든 tar.gz/ISO의 `install`은 GRUB 메뉴를 10초 표시하도록 설정하고 검증합니다. GRUB2 설정은 `/etc/default/grub.d/zzzz-systemvm-kernel-menu.cfg`에 저장되며, 기존 설정 백업 경로가 설치 로그에 출력됩니다. `check`와 `check-boot`는 설정을 변경하지 않습니다. 기존 배포 아카이브를 원격 적용할 때는 최신 `deploy-systemvm-kernel.sh`가 같은 설정을 수행합니다.
+
+커널에 문제가 생기면 VM 콘솔에서 `Advanced options for Debian GNU/Linux`의 이전 커널을 선택합니다. 이전 커널이 설치되어 있어야 합니다. 자동 롤백 기능은 아닙니다.
+
+## 원격 적용 로그 위치
+
+원격 적용 로그는 명령을 실행한 VM의 다음 경로에 실행별로 저장됩니다.
+
+```text
+/var/lib/systemvm-kernel-rollout/systemvm-rollout-<UTC시간>-<대상IP>-port-<SSH포트>-<실행식별자>-<식별자>/
+  controller.log  # 전체 진행 상황과 오류
+  remote.log      # 종료 시 대상 VM에서 수집한 설치·GRUB·검증 로그
+```
+
+실행 계정에는 `/var/lib/systemvm-kernel-rollout/`의 쓰기 권한이 필요합니다. root로 실행하거나 해당 디렉터리의 쓰기 권한을 미리 준비합니다. 로그 생성에 실패하면 대상 VM 접속 전에 종료합니다.
+
+대상 VM의 원본 로그는 `/var/lib/systemvm-kernel-rollout/<실행ID>/`에 남습니다. 종료 시 대상에 접속할 수 없으면 `remote.log` 수집에 실패할 수 있으며, `log-fetch-error.txt`에서 수집 오류를 확인합니다. 자세한 원격 실행 방법은 [REMOTE-INSTALL.md](REMOTE-INSTALL.md)를 참고합니다.

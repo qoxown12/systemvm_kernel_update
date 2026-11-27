@@ -2,7 +2,7 @@
 # GRUB inspection and guarded updates. Standalone modes are read-only.
 # Prefer the validated existing GRUB2 config, independently of leftover tools.
 # Actual execution of the selected kernel is verified after reboot.
-grub_boot_revision=20261106-grub2-primary-3
+grub_boot_revision=20261110-grub-menu-10s-1
 grub_error() { printf 'ERROR: %s\n' "$*" >&2; return 1; }
 
 grub_detect() {
@@ -188,6 +188,90 @@ grub_update_config_set() {
     grub_validate_config_set "$kind" "$config" "$release"
 }
 
+# Keep this block identical in the standalone remote worker and bundle helper.
+grub_enable_recovery_menu() {
+    local kind=$1 config=$2 release=$3 backup defaults=/etc/default/grub
+    local drop_dir=/etc/default/grub.d drop_file candidate
+    backup=$(mktemp -d "$(dirname -- "$config")/kernel-menu-backup.XXXXXXXX") || return 1
+    cp -p -- "$config" "$backup/" || return 1
+    printf 'GRUB recovery menu backup: %s\n' "$backup"
+    if [[ $kind == grub2 ]]; then
+        [[ -f $defaults && -r $defaults ]] || {
+            grub_error 'Missing /etc/default/grub; cannot configure recovery menu.'; return 1;
+        }
+        cp -p -- "$defaults" "$backup/default-grub" || return 1
+        mkdir -p -- "$drop_dir" || return 1
+        drop_file="$drop_dir/zzzz-systemvm-kernel-menu.cfg"
+        if [[ -e $drop_file || -L $drop_file ]]; then
+            [[ -f $drop_file && ! -L $drop_file ]] || {
+                grub_error 'Managed GRUB menu drop-in must be a regular file.'; return 1;
+            }
+            cp -p -- "$drop_file" "$backup/menu-drop-in.cfg" || return 1
+        fi
+        candidate=$(mktemp "$drop_dir/.kernel-menu.XXXXXXXX") || return 1
+        cat > "$candidate" <<'MENU'
+# Managed by the offline SystemVM kernel installer.
+GRUB_TIMEOUT_STYLE=menu
+GRUB_TIMEOUT=10
+GRUB_RECORDFAIL_TIMEOUT=10
+MENU
+        chmod 0644 "$candidate" || return 1
+        mv -f -- "$candidate" "$drop_file" || return 1
+        # Inspect the same ordering used by Debian grub-mkconfig. A later
+        # site-specific override must not silently hide the recovery menu.
+        if ! /bin/sh -c '
+            . /etc/default/grub
+            for f in /etc/default/grub.d/*.cfg; do
+                [ ! -e "$f" ] || . "$f" || exit 1
+            done
+            [ "$GRUB_TIMEOUT_STYLE" = menu ] && [ "$GRUB_TIMEOUT" = 10 ] &&
+                [ "$GRUB_RECORDFAIL_TIMEOUT" = 10 ]
+        '; then
+            grub_error "GRUB menu settings are overridden or invalid; review $drop_dir. Backup: $backup. Do not reboot."
+            return 1
+        fi
+    fi
+    grub_update_config_set "$kind" "$config" "$release" || return 1
+    if [[ $kind == legacy ]]; then
+        candidate=$(mktemp "$(dirname -- "$config")/.kernel-menu.XXXXXXXX") || return 1
+        # Preserve updater metadata comments, including Debian automagic options.
+        awk '
+            /^[[:space:]]*timeout[[:space:]=]/ {next}
+            /^[[:space:]]*hiddenmenu([[:space:]]|$)/ {next}
+            BEGIN {print "timeout 10"}
+            {print}
+        ' "$config" > "$candidate" || return 1
+        chmod --reference="$config" "$candidate" || return 1
+        mv -f -- "$candidate" "$config" || return 1
+    fi
+    grub_validate_recovery_menu "$kind" "$config" || return 1
+    printf 'GRUB recovery menu enabled: 10 seconds. Select an installed previous kernel using the VM console.\n'
+}
+
+grub_validate_recovery_menu() {
+    local kind=$1 config=$2
+    if ! awk -v kind="$kind" '
+        /^[[:space:]]*#/ {next}
+        kind=="legacy" && $1=="hiddenmenu" {bad=1}
+        kind=="legacy" && $1=="timeout" {seen++; if ($2!="10") bad=1}
+        kind=="grub2" && $1=="set" && $2 ~ /^timeout_style=/ {
+            style=$2; gsub(/[\042\047]/,"",style)
+            if (style!="timeout_style=menu") bad=1
+            menu++
+        }
+        kind=="grub2" && $1=="set" && $2 ~ /^timeout=/ {
+            value=$2; gsub(/[\042\047]/,"",value)
+            if (value!="timeout=10") bad=1
+            seen++
+        }
+        END {exit (bad || !seen || (kind=="grub2" && !menu)) ? 1 : 0}
+    ' "$config"; then
+        grub_error "Cannot verify a visible 10-second menu in $config. Do not reboot."
+        return 1
+    fi
+}
+# End shared recovery menu block.
+
 grub_show_selection() {
     local kind=$1 config=$2 grub_dir
     grub_dir=$(dirname -- "$config")
@@ -209,7 +293,7 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
     export LC_ALL=C
     mode=${1:-}
     release=${2:-}
-    [[ $# -eq 2 && ( $mode == preflight || $mode == check ) && $release =~ ^6\.1\.0-[0-9]+-amd64$ ]] || {
+    [[ $# -eq 2 && ( $mode == preflight || $mode == check ) && $release =~ ^6\.(1\.0-[0-9]+|12\.[0-9]+\+deb12)-amd64$ ]] || {
         printf 'Usage: bash %s preflight|check KERNEL-RELEASE\n' "$0" >&2; exit 1;
     }
     grub_detect

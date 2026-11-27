@@ -74,3 +74,24 @@ prepare-debian12-kernel-offline.sh의 --target-status 옵션으로 반영합니�
 재생성되는 SystemVM에도 유지하려면 호환되는 템플릿을 별도로 갱신하고
 검증해야 합니다. 같은 ABI 패키지 갱신 시 이전 빌드 파일은 교체될 수
 있으므로 복구 가능한 백업과 콘솔을 준비합니다.
+
+[커널 복구용 메뉴]
+최신 설치기의 install은 GRUB 커널 선택 메뉴를 10초 표시하도록 자동 설정합니다.
+GRUB2: /etc/default/grub.d/zzzz-systemvm-kernel-menu.cfg
+  GRUB_TIMEOUT_STYLE=menu
+  GRUB_TIMEOUT=10
+  GRUB_RECORDFAIL_TIMEOUT=10
+변경 전 설정을 백업하고 재생성된 부팅 설정을 검증합니다.
+check/check-boot/verify는 메뉴 설정을 변경하지 않습니다.
+이전 커널이 설치되어 있으면 VM 콘솔의 Advanced options for Debian GNU/Linux에서 선택할 수 있습니다.
+기존 tar.gz의 원격 적용은 최신 deploy-systemvm-kernel.sh를 사용하면 재압축 없이 적용됩니다.
+
+[원격 적용 로그 위치]
+명령 실행 VM: /var/lib/systemvm-kernel-rollout/systemvm-rollout-<UTC시간>-<대상IP>-port-<SSH포트>-<실행식별자>-<식별자>/
+  controller.log: 전체 진행 상황과 오류
+  remote.log: 종료 시 대상 VM에서 수집한 설치·GRUB·검증 로그
+root로 실행하거나 실행 계정에 /var/lib/systemvm-kernel-rollout/ 쓰기 권한을 미리 부여합니다.
+로그를 생성할 수 없으면 대상 VM 접속 전에 종료합니다.
+대상 VM 원본: /var/lib/systemvm-kernel-rollout/<실행ID>/
+대상에 접속할 수 없어 로그 수집에 실패하면 log-fetch-error.txt를 확인합니다.
+원격 실행 방법: REMOTE-INSTALL.md

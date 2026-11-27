@@ -20,8 +20,13 @@ kernel_pkg=$(cat kernel-package.txt)
 kernel_ver=$(cat kernel-version.txt)
 meta_ver=$(cat meta-version.txt)
 minimum=$(cat cve-fixed-version.txt)
-[[ $kernel_pkg =~ ^linux-image-6\.1\.0-[0-9]+-amd64$ ]] || die 'Invalid kernel manifest.'
-[[ $kernel_ver == "$meta_ver" && $kernel_ver =~ ^6\.1\.[0-9]+-[0-9A-Za-z.+~]+$ ]] || die 'Invalid version manifest.'
+case $kernel_pkg in
+    linux-image-6.1.0-*) kernel_meta=linux-image-amd64; kernel_cve=CVE-2026-43499 ;;
+    linux-image-6.12.*) kernel_meta=linux-image-6.12-amd64; kernel_cve=CVE-2026-99362 ;;
+    *) die 'Invalid kernel manifest.' ;;
+esac
+[[ $kernel_pkg =~ ^linux-image-6\.(1\.0-[0-9]+|12\.[0-9]+\+deb12)-amd64$ ]] || die 'Invalid kernel manifest.'
+[[ $kernel_ver == "$meta_ver" && $kernel_ver =~ ^6\.(1|12)\.[0-9]+-[0-9A-Za-z.+~]+$ ]] || die 'Invalid version manifest.'
 dpkg --compare-versions "$kernel_ver" ge "$minimum" || die 'Kernel is below the CVE fixed version.'
 kernel_release=${kernel_pkg#linux-image-}
 installed_version() {
@@ -39,7 +44,7 @@ if [[ $mode == verify ]]; then
     running_build=$(sed -n 's/.* Debian \([^ ]*\) .*/\1/p' /proc/version)
     [[ $running_build == "$current" ]] ||
         die "Running Debian build ${running_build:-unknown}; installed build $current. Reboot into the updated kernel."
-    printf 'Verified: running %s, Debian build %s, CVE-2026-43499 fixed since %s.\n' "$kernel_release" "$current" "$minimum"
+    printf 'Verified: running %s, Debian build %s, %s fixed since %s.\n' "$kernel_release" "$current" "$kernel_cve" "$minimum"
     printf 'Now validate SSVM/CPVM/VR functions and systemctl --failed.\n'
     exit 0
 fi
@@ -60,12 +65,12 @@ if [[ $mode == check-boot ]]; then
     exit 0
 fi
 grub_require_update_tools "$grub_kind" "$grub_config" || die 'Required boot configuration tools/setup are unavailable. No packages installed.'
-targets=("$kernel_pkg=$kernel_ver" "linux-image-amd64=$meta_ver")
+targets=("$kernel_pkg=$kernel_ver" "$kernel_meta=$meta_ver")
 while IFS= read -r root; do
     [[ $root =~ ^[a-z0-9][a-z0-9+.-]*$ ]] || die 'Invalid root package manifest.'
-    [[ $root == linux-image-amd64 ]] || targets+=("$root")
+    [[ $root == "$kernel_meta" ]] || targets+=("$root")
 done < roots.txt
-for name in "$kernel_pkg" linux-image-amd64; do
+for name in "$kernel_pkg" "$kernel_meta"; do
     if current=$(installed_version "$name"); then
         dpkg --compare-versions "$current" le "$kernel_ver" ||
             die "$name is newer ($current) than this bundle ($kernel_ver); refusing downgrade."
@@ -163,7 +168,7 @@ audit=$(dpkg --audit)
 update-initramfs -u -k "$kernel_release"
 [[ -s /boot/vmlinuz-$kernel_release && -s /boot/initrd.img-$kernel_release && -d /lib/modules/$kernel_release ]] ||
     die 'Missing kernel/initramfs/modules. Do not reboot.'
-grub_update_config_set "$grub_kind" "$grub_config" "$kernel_release"
+grub_enable_recovery_menu "$grub_kind" "$grub_config" "$kernel_release"
 grub_show_selection "$grub_kind" "$grub_config"
 printf '\nInstalled %s. No reboot performed.\n' "$kernel_release"
 printf 'Check GRUB default/saved entry and recovery console, reboot in maintenance, then run:\n'

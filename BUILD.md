@@ -203,3 +203,13 @@ bash /mnt/kernel-offline/install-kernel.sh verify
 - [genisoimage](https://manpages.debian.org/bookworm/genisoimage/genisoimage.1.en.html)
 - [isoinfo](https://manpages.debian.org/bookworm/genisoimage/isoinfo.1.en.html)
 - [mount](https://manpages.debian.org/bookworm/mount/mount.8.en.html)
+
+## CA 인증서 DEB를 포함한 커널 tar.gz 생성
+
+`ca-certificates_20250419~deb12u2_all.deb`를 `output/` 또는 빌드 스크립트 옆에 배치하고 실행합니다.
+
+```bash
+sudo bash prepare-debian12-kernel-offline.sh ./output
+```
+
+스크립트는 CA 패키지명·버전·아키텍처를 확인하고 번들의 `repo/`에 복사합니다. 최종 `Packages`, `packages.tsv`, `SHA256SUMS` 및 tar.gz에 포함됩니다. 파일이 없거나 메타데이터가 다르면 다운로드 전에 중단합니다. 빌드 서버에 CA 패키지를 설치하지는 않습니다.

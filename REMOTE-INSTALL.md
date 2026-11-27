@@ -33,7 +33,7 @@ ssh -V
 
 Rocky 9 기본 Python 3.9를 사용할 수 있습니다. 별도 Python 3.11 설치나 pip 패키지는 필요하지 않습니다. 아카이브 해시는 파일을 나누어 읽는 표준 SHA256 계산으로 검사합니다. 대상 VM에는 이 검증을 위한 Python을 추가 설치하지 않습니다. Rocky의 기본 Python·OpenSSH 구성은 [공식 릴리스 문서](https://docs.rockylinux.org/releases/release_notes/9_0/)를 참고합니다.
 
-실행 VM에서는 키 파일을 읽을 수 있고 현재 디렉터리에 로그를 만들 수 있는 계정이면 됩니다. 로컬 root는 필수가 아닙니다. 대상의 `cloud` 계정은 키로 접속할 수 있고 **비밀번호 입력 없이 `sudo -n`으로 root의 Bash를 실행**할 수 있어야 합니다. 스크립트가 sudo 정책이나 키 권한을 변경하지는 않습니다. 암호화한 키는 실행 전 ssh-agent에 등록하여 비대화형 접속이 가능하게 준비합니다.
+실행 VM에서는 키 파일을 읽을 수 있고 `/var/lib/systemvm-kernel-rollout/`에 로그를 만들 수 있어야 합니다. root로 실행하거나, 실행 계정에 해당 로그 디렉터리의 쓰기 권한을 미리 부여합니다. 로그 디렉터리를 만들 수 없으면 대상 VM 접속 전에 오류로 종료합니다. 대상의 `cloud` 계정은 키로 접속할 수 있고 **비밀번호 입력 없이 `sudo -n`으로 root의 Bash를 실행**할 수 있어야 합니다. 스크립트가 sudo 정책이나 키 권한을 변경하지는 않습니다. 암호화한 키는 실행 전 ssh-agent에 등록하여 비대화형 접속이 가능하게 준비합니다.
 
 키의 내용은 읽어서 로그에 출력하거나 대상으로 전송하지 않습니다. SSH 클라이언트의 인증에만 사용합니다. 처음 보는 SSH 호스트 키는 등록하며, 기존 호스트 키가 바뀌면 접속을 거절합니다.
 
@@ -81,7 +81,7 @@ bash deploy-systemvm-kernel.sh \
 
 1. Debian 12, amd64이며 systemd가 동작한다.
 2. `systemd-detect-virt --vm`으로 가상머신이 확인된다.
-3. 제품 릴리스 정보, 템플릿 초기화 스크립트, `/var/cache/cloud/cmdline` 역할 캐시가 존재하고 비어 있지 않다.
+3. 템플릿 초기화 스크립트 `/opt/cloud/bin/setup/common.sh`와 `/var/cache/cloud/cmdline` 역할 캐시가 존재하고 비어 있지 않다. 일부 CKS 템플릿에 없는 `/etc/ablestack-release`는 필수 조건이 아니다.
 4. cmdline의 `type=`이 `secstorage`, `consoleproxy`, `router`, `vpcrouter`, `dhcpsrvr`, `internallbvm`, `cksnode` 중 하나이며 하나의 역할만 지정되어 있다.
 5. `cksnode`는 추가로 `kubelet.service` 또는 `etcd.service`가 로드되어 있어야 한다. kubelet이 있으면 Kubernetes 노드로, kubelet 없이 etcd가 있으면 전용 etcd 노드로 서비스 확인 기준을 잡는다.
 6. `cloud`의 비대화형 sudo 및 필요한 원격 명령을 사용할 수 있다.
@@ -90,7 +90,7 @@ bash deploy-systemvm-kernel.sh \
 
 `type=cksnode`는 관리형 Kubernetes 노드를 나타냅니다. 해당 유형은 제품 SystemVM 템플릿을 기반으로 배포된 노드이며, `cloud` 계정으로 접속합니다.
 
-`cksnode`를 SSVM/CPVM/VR과 별도로 분류하여 지원하는 스크립트 리비전은 `20261106-rocky9-cks-1`입니다. 기존 파일을 교체한 뒤 `bash deploy-systemvm-kernel.sh --help`의 Revision 값을 확인합니다. 이전 리비전의 `Unknown or ambiguous SystemVM type` 오류가 났을 때에는 전송·설치·재부팅이 수행되지 않았습니다.
+`cksnode`를 SSVM/CPVM/VR과 별도로 분류하여 지원하는 스크립트 리비전은 `20261110-rocky9-template-markers-2`입니다. 기존 파일을 교체한 뒤 `bash deploy-systemvm-kernel.sh --help`의 Revision 값을 확인합니다. 이전 리비전의 `Unknown or ambiguous SystemVM type` 오류가 났을 때에는 전송·설치·재부팅이 수행되지 않았습니다.
 
 이 검사는 게스트 내부 증거를 사용합니다. 관리 API의 VM UUID 대조는 수행하지 않습니다. cmdline은 인증 정보가 포함될 수 있으므로 전체 내용을 출력하거나 실행하지 않고 `type=`만 읽습니다.
 
@@ -102,7 +102,7 @@ bash deploy-systemvm-kernel.sh \
 | 2 | SSH·sudo·제품 가상머신 역할·OS·아키텍처 확인 및 VM 식별값과 boot ID 기록 |
 | 3 | cloud 홈의 임시 디렉터리로 tar.gz와 원격 작업기만 SCP 전송 |
 | 4 | root 전용 작업본을 확보하고 전송 해시 확인, 원격 systemd 작업 시작 |
-| 5 | 압축 해제와 내부 무결성 확인 → check → install → check-boot |
+| 5 | 압축 해제와 내부 무결성 확인 → check → install → GRUB 메뉴 10초 설정·재생성·검증 → check-boot |
 | 6 | 위 단계가 모두 통과한 경우에만 재부팅 1회 예약 |
 | 7 | 같은 IP·포트로 재접속, 이전과 다른 boot ID 및 동일 VM 식별값 확인 |
 | 8 | 기존 설치기의 verify, dpkg audit, 실패 유닛과 필수 서비스 확인 |
@@ -121,6 +121,14 @@ bash deploy-systemvm-kernel.sh \
 동일 VM 식별값은 machine ID, 접근 가능한 DMI UUID, SystemVM 역할을 조합한 해시입니다. 준비 중 다른 VM으로 바뀌거나 부팅이 바뀌면 중단합니다. SSH가 연결된다는 사실만으로 재부팅 완료로 판단하지 않습니다.
 
 각 단계의 오류 시 다음 단계로 진행하지 않습니다. 설치나 check-boot가 실패하면 재부팅을 예약하지 않습니다. 재부팅 후 검증 실패 시 자동 재설치, 서비스 재시작, 두 번째 재부팅은 수행하지 않습니다.
+
+## 커널 복구용 GRUB 메뉴
+
+전체 적용 시 대상 VM에 커널 선택 메뉴가 **10초** 표시되도록 자동 설정합니다. 기존 tar.gz도 새 `deploy-systemvm-kernel.sh`로 실행하면 적용되며 재압축은 필요하지 않습니다. `--check-only`, `--verify-only`는 설정을 변경하지 않습니다.
+
+GRUB2는 `/etc/default/grub.d/zzzz-systemvm-kernel-menu.cfg`에 `GRUB_TIMEOUT_STYLE=menu`, `GRUB_TIMEOUT=10`, `GRUB_RECORDFAIL_TIMEOUT=10`을 기록합니다. 기존 검사기의 `grub-mkconfig` 경로로 설정을 재생성하고 부팅 항목과 실제 메뉴 설정을 검증합니다. 다른 설정이 이를 덮어쓰거나 생성·검증이 실패하면 자동 재부팅을 진행하지 않습니다. GRUB Legacy는 `menu.lst`의 숨김 메뉴를 해제하고 `timeout 10`을 설정합니다.
+
+변경 전 설정은 `/boot/grub/kernel-menu-backup.*`에 보관되며 경로가 로그에 출력됩니다. 커널 문제 발생 시 하이퍼바이저의 VM 콘솔에서 GRUB 메뉴의 `Advanced options for Debian GNU/Linux`에 들어가 설치되어 있는 이전 커널을 선택합니다. 이전 커널 파일과 패키지가 남아 있어야 하며, 이 기능은 수동 커널 선택을 제공하고 자동 롤백을 수행하지 않습니다.
 
 ## 재부팅 후 서비스 확인 범위
 
@@ -169,7 +177,7 @@ bash deploy-systemvm-kernel.sh -k /path/to/systemvm_ssh_key -i 192.0.2.10 -p 222
 
 ## 로그와 성공 판정
 
-실행 VM의 현재 디렉터리에 `systemvm-rollout-<실행ID>-<식별자>/`가 생성됩니다.
+실행 VM의 `/var/lib/systemvm-kernel-rollout/systemvm-rollout-<UTC시간>-<대상IP>-port-<SSH포트>-<실행식별자>-<식별자>/`에 실행별 로그가 생성됩니다. 전체 적용, `--check-only`, `--verify-only` 모두 같은 경로를 사용하며, 실행 시작과 종료 시 실제 경로가 출력됩니다. 폴더명에 접속 대상 IP와 SSH 포트를 포함하므로 같은 IP의 서로 다른 포트로 접속하는 VM도 구분할 수 있습니다. IPv6 주소의 `:`는 `_`로 표시합니다. 예: `systemvm-rollout-20261110T042232Z-192.168.1.10-port-2222-nXPax4Vt-mBMGBZnU/`. 기존 로그 폴더는 그대로 보존되며, 변경 후 실행부터 새 이름을 사용합니다. 로그가 자동 삭제되거나 순환되지는 않습니다.
 
 | 파일 | 내용 |
 | --- | --- |
@@ -184,7 +192,7 @@ bash deploy-systemvm-kernel.sh -k /path/to/systemvm_ssh_key -i 192.0.2.10 -p 222
 ```text
 status                       # 진행 상태 또는 VERIFIED / COMPLETE_CHECK / FAILED
 error.txt                    # 실패 단계와 종료 코드
-run.log                      # 추출·check·install·check-boot·재부팅 예약
+run.log                      # 추출·check·install·GRUB 메뉴 설정·check-boot·재부팅 예약
 verify.log                   # 재부팅 후 커널·서비스 검증
 services-before.txt          # 업데이트 전 실패 서비스
 required-services.txt        # 재부팅 후 활성 상태여야 하는 서비스

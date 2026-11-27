@@ -46,13 +46,17 @@ def fields(control):
 
 def tracker(path):
     html = pathlib.Path(path).read_text()
-    if "<title>CVE-2026-43499</title>" not in html:
+    cve = pathlib.Path(path).stem
+    sources = {"CVE-2026-43499": ("linux", "6.1"),
+               "CVE-2026-99362": ("linux-6.12", "6.12")}
+    source, series = sources[cve]
+    if f"<title>{cve}</title>" not in html:
         raise ValueError("Unexpected CVE tracker page")
     parser = Rows()
     parser.feed(html)
     versions = [r[3] for r in parser.rows
-                if len(r) >= 4 and r[:3] == ["linux", "source", "bookworm"]]
-    if len(versions) != 1 or not re.fullmatch(r"6\.1\.\d+-[0-9A-Za-z.+~]+", versions[0]):
+                if len(r) >= 4 and r[:3] == [source, "source", "bookworm"]]
+    if len(versions) != 1 or not re.fullmatch(rf"{re.escape(series)}\.\d+-[0-9A-Za-z.+~]+", versions[0]):
         raise ValueError("Cannot identify a unique fixed bookworm/linux version; refusing to continue")
     print(versions[0])
 
@@ -86,14 +90,14 @@ def index(bundle):
         for item, name, _ in records:
             manifest.write("\t".join([item["Package"], item["Version"], item["Architecture"],
                                       name, item.get("Installed-Size", "0")]) + "\n")
-    kernels = [r[0] for r in records if re.fullmatch(r"linux-image-6\.1\.0-\d+-amd64", r[0]["Package"])]
-    metas = [r[0] for r in records if r[0]["Package"] == "linux-image-amd64"]
+    kernels = [r[0] for r in records if re.fullmatch(r"linux-image-6\.(?:1\.0-\d+|12\.\d+\+deb12)-amd64", r[0]["Package"])]
+    metas = [r[0] for r in records if r[0]["Package"] in ("linux-image-amd64", "linux-image-6.12-amd64")]
     if len(kernels) != 1 or len(metas) != 1:
         raise ValueError("Expected one bookworm generic amd64 kernel and one metapackage")
     kernel, meta = kernels[0], metas[0]
     if kernel["Version"] != meta["Version"]:
         raise ValueError("Kernel/metapackage version mismatch")
-    if not kernel.get("Source", "").startswith(("linux-signed-amd64 (", "linux (")):
+    if not kernel.get("Source", "").startswith(("linux-signed-amd64 (", "linux (", "linux-6.12-signed-amd64 (", "linux-signed-6.12-amd64 (", "linux-6.12 (")):
         raise ValueError("Unexpected kernel source package")
     for name, value in (("kernel-package.txt", kernel["Package"]),
                         ("kernel-version.txt", kernel["Version"]),
